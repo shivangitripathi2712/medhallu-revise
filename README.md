@@ -27,13 +27,9 @@ conditions:
 
 | Setting | Evidence source | Purpose |
 |---------|----------------|---------|
-| **Gold context** | The dataset's own reference passage | Tests correction when the correct source is available. |
 | **Azure AI Search** | A corpus indexed in Azure (keyword search) | Tests correction under corpus-based retrieval. |
 | **Web (Serper)** | Live Google search | Tests correction under open-web retrieval. |
 
-A separate **black-box agent** baseline is also included: an autonomous agent
-that performs its own searches and produces a corrected answer directly, for
-comparison against the structured pipeline.
 
 ## Repository structure
 
