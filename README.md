@@ -1,94 +1,153 @@
-# RARR: Researching and Revising What Language Models Say, Using Language Models
+#  Hallucination Correction with REVISE
 
-Welcome! This repository contains a public implementation for [RARR: Researching and Revising What Language Models Say, Using Language Models](https://arxiv.org/abs/2210.08726) from CMU, Google Research, and UC Irvine. RARR addresses the attribution and factuality problems in large language models (LLMs) in a post-hoc manner by retrieving evidence to attribute the LLM's output and editing the output to be facutally consistent with the evidence.
-RARR uses large language models themselves to do the editing.
+A retrieve-and-edit pipeline that corrects hallucinated content in medical text.
+Given a statement that may contain factual errors, the system retrieves
+supporting evidence and rewrites the statement to be consistent with that
+evidence. It is built on the RARR/REVISE approach and evaluated on the
+[MedHallu](https://huggingface.co/datasets/UTAustin-AIHealth/MedHallu) benchmark.
 
-The techniques in RARR are quite general so if you are working on ***any*** task using LLMs to edit the output of LLMs (*e.g.*, removing bias, fixing toxing outputs, etc.), you may find this repository a good starting point.
+## Overview
 
-The easiest way to start using RARR is to NOT pull this repository, and instead copy this [Colab notebook](https://colab.research.google.com/drive/15zU1AC4XoIKqGRtzgUPo192CpNyZSdQO?usp=sharing) into your Google Drive and run the cells to get started!
-Alternatively, you can pull this repository and follow the following steps to get started.
+For each input paragraph (a hallucinated medical answer from MedHallu), the
+pipeline runs four stages:
 
-## Getting Started
-The repository was tested on Ubuntu 20.04.2 LTS using Python 3.8.
-First install dependencies in `requirements.txt`, then run `python -m spacy download en_core_web_sm`.
+1. **Question generation** — an LLM produces fact-checking questions for the claim.
+2. **Retrieval** — each question is used to fetch supporting evidence.
+3. **Agreement gate** — an NLI check decides whether the evidence contradicts the
+   claim; irrelevant evidence is discarded.
+4. **Editing** — when the gate fires, an LLM rewrites the claim to match the evidence.
 
-### Setting up APIs
-#### **Bing API**
-We use Bing to search for relevant evidence.
-To setup a Bing API, create an [Azure account](https://portal.azure.com/#home), then [create a subscription](https://portal.azure.com/#view/Microsoft_Azure_Billing/SubscriptionsBlade), then [create a Bing Search API](https://portal.azure.com/#create/microsoft.bingsearch) using the subscription you created.
-We recommend the [S2 pricing plan](https://www.microsoft.com/en-us/bing/apis/pricing) which costs $3 every 1000 calls.
-You will be given two API keys.
-Copy one of the keys and add the following to your `~/.bash_profile`:
-```bash
-export AZURE_SEARCH_KEY="<BING_API_KEY>"
+The output is a corrected paragraph plus the evidence and gate decision behind
+each edit.
+
+## Retrieval settings
+
+The pipeline supports three evidence sources, used as separate experimental
+conditions:
+
+| Setting | Evidence source | Purpose |
+|---------|----------------|---------|
+| **Gold context** | The dataset's own reference passage | Tests correction when the correct source is available. |
+| **Azure AI Search** | A corpus indexed in Azure (keyword search) | Tests correction under corpus-based retrieval. |
+| **Web (Serper)** | Live Google search | Tests correction under open-web retrieval. |
+
+A separate **black-box agent** baseline is also included: an autonomous agent
+that performs its own searches and produces a corrected answer directly, for
+comparison against the structured pipeline.
+
+## Repository structure
+
+```
+.
+├── run_editor_sequential.py     # main correction pipeline
+├── azure_search_retrieval.py    # Azure AI Search retriever
+├── requirements.txt
+│
+├── scripts/
+│   ├── build_medhallu_input.py      # build MedHallu input files
+│   ├── detect_medhallu.py           # hallucination detection benchmark
+│   ├── agent_corrector_single.py    # black-box agent (single example)
+│   └── agent_corrector_batch.py     # black-box agent (batch)
+│
+├── inputs/                      # MedHallu dataset inputs
+├── outputs/
+│   ├── azure/                       # results using Azure AI Search
+│   ├── tavily_serper/               # results using web search + agent
+│   ├── gold_context/                # results using the gold passage
+│   └── detection/                   # detection benchmark results
+│
+├── utils/                       # pipeline modules
+│   ├── search.py                    # retrieval (Azure / web)
+│   ├── agreement_gate.py            # evidence agreement gate
+│   ├── editor.py                    # claim editing
+│   └── question_generation.py       # question generation
+│
+└── prompts/                     # prompt templates
 ```
 
-If you would like to quickly test the RARR pipeline without having access to a search API key, see [Editing a Single Claim](### Editing a Single Claim).
+## Setup
 
-#### **OpenAI API**
-We use LLMs from OpenAI to verify and edit the claims.
-Add the following to your `~/.bash_profile`:
+The pipeline runs in a Python 3.10 environment:
+
 ```bash
-export OPENAI_API_KEY="<OPENAI_API_KEY>"
+conda create -n revise python=3.10 -y
+conda activate revise
+pip install -r requirements.txt
+python -m spacy download en_core_web_sm
+python -c "import nltk; nltk.download('punkt')"
 ```
 
-## Using RARR to Improve Attribution and Factuality of LLMs
-<!-- ![](figs/RARR.jpg) -->
-<p align="center"><img src="figs/RARR.jpg"  width="50%"></p>
-<!-- <p align="center">An overview of RARR, which improves attribution via research and revision.</p> -->
+Set the required keys (the LLM is always used; the search keys depend on the
+retrieval setting):
 
-RARR (***R**etrofit **A**ttribution using **R**esearch and **R**evision*), improves the attribution and factuality of langauge models by taking their outputs and applying a post-hoc retrieve-and-edit approach.
-Given the output of a LLM (*i.e.*, claim), RARR applies the following steps:
+```bash
+export OPENAI_API_KEY="..."                 # always
+export AZURE_SEARCH_ENDPOINT="..."          # for Azure AI Search
+export AZURE_SEARCH_ADMIN_KEY="..."         # for Azure AI Search
+export SERPER_API_KEY="..."                 # for web search
+```
 
-1. [Question Generation](utils/question_generation.py): We generate a set of queries using a prompted LLM to interrogate the claim.
-2. [Search](utils/search.py): For each query, we search for relevant webpages, then apply a passage extractor to retrieve the most relevant passage(s) for the query as evidence.
-3. We iteratively use each evidence to edit the claim in two steps.
-    1. [Agreement Gate](utils/agreement_gate.py): We use a prompted LLM to decide whether the current evidence contradicts the information in the claim. If so, we move to editing. If not, we skip editing.
-    2. [Editing](utils/editor.py): We use a prompted LLM to edit the claim so it is consistent with the current evidence.
-4. [Generating Attribution Report](utils/evidence_selection.py): We extract a subset of the evidence as an attribution report (*i.e.*, a citation for information in the claim).
+## Usage
 
-### Editing a File of Claims
-Given a JSONLines file, where each line is a dictionary with the key `input_info` and under this is a dictionary with a claim field run the following.
-An example line:
-`{"input_info": {"claim": "Michael Jordan played for the LA Lakers."}}`
+**Build the dataset input:**
+```bash
+python scripts/build_medhallu_input.py
+```
 
+**(Azure setting) Build the search index:**
+```bash
+python azure_search_retrieval.py inputs/medhallu_statements.jsonl
+```
+
+**Run the correction pipeline:**
 ```bash
 python run_editor_sequential.py \
-  --input_file "path/to/input_file.jsonl" \
-  --output_file "path/to/output_file.jsonl" \
-  --model_name "text-davinci-003" \
-  --claim_field "claim"
+  --input_file  inputs/medhallu_3.jsonl \
+  --output_file outputs/azure/medhallu_azure_3.jsonl \
+  --model gpt-3.5-turbo \
+  --max_search_results_per_query 3
 ```
 
-**WARNING!!** We also provide the ability to provide a `--hallucinate-evidence` flag which uses a LLM to generate evidence instead of retrieving it.
-We provide this flag to quickly test the repository quickly in the event a search API cannot be obtained.
-This flag should NEVER be set when using RARR to improve attribution as the evidence generated may contain hallucinations themselves.
+Add `--use_knowledge` to run the gold-context setting (uses the dataset's
+reference passage instead of retrieval).
 
-### Editing a Single Claim
-```python
+**Inspect results:**
+```bash
+python -c "
 import json
-from run_editor_sequential import run_editor_one_instance
-
-claim = "Michael Jordan played for the LA Lakers."
-result = run_editor_one_instance(claim=claim, model="text-davinci-003")
-print(json.dumps(result, indent=4))
-
-# To hallucinate evidence using a LLM. Do NOT trust attribution results in this mode.
-claim = "Michael Jordan played for the LA Lakers."
-do_not_trust_result = run_editor_one_instance(claim=claim, model="text-davinci-003", hallucinate_evidence=True)
-print(json.dumps(do_not_trust_result, indent=4))
+for line in open('outputs/azure/medhallu_azure_3.jsonl'):
+    o = json.loads(line)
+    print('Hallucinated:', o.get('claim','')[:90])
+    print('Ground truth:', o.get('long_answer','')[:110])
+    print('Revised     :', o.get('revised_claim','')[:130])
+    print('-'*60)
+"
 ```
 
+**Run the black-box agent baseline:**
+```bash
+python scripts/agent_corrector_batch.py \
+  --input inputs/medhallu_3.jsonl \
+  --output outputs/tavily_serper/agent_3.jsonl \
+  --model gpt-4o-mini
+```
 
-## Citation
-If you find this repository useful, please cite the RARR paper.
+**Run the detection benchmark** (a separate classification task — is an answer
+hallucinated?):
+```bash
+python scripts/detect_medhallu.py --n 100              # without reference
+python scripts/detect_medhallu.py --n 100 --knowledge  # with reference
 ```
-@article{Gao2022RARRRA,
-  title={RARR: Researching and Revising What Language Models Say, Using Language Models},
-  author={Luyu Gao and Zhuyun Dai and Panupong Pasupat and Anthony Chen and Arun Tejasvi Chaganty and Yicheng Fan and Vincent Zhao and N. Lao and Hongrae Lee and Da-Cheng Juan and Kelvin Guu},
-  journal={ArXiv},
-  year={2022},
-  volume={abs/2210.08726},
-  url={https://arxiv.org/abs/2210.08726},
-}
-```
+
+## Output
+
+Each run produces:
+- a `.jsonl` file with the full records (original claim, revised claim, ground
+  truth, and the evidence and gate decision per statement), and
+- an `.xlsx` sheet comparing the hallucinated claim, ground truth, and revised
+  claim side by side.
+
+## Acknowledgement
+
+This work builds on RARR (Gao et al., 2022), *Researching and Revising What
+Language Models Say, Using Language Models*.
