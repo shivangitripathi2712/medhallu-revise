@@ -20,17 +20,6 @@ pipeline runs four stages:
 The output is a corrected paragraph plus the evidence and gate decision behind
 each edit.
 
-## Retrieval settings
-
-The pipeline supports three evidence sources, used as separate experimental
-conditions:
-
-| Setting | Evidence source | Purpose |
-|---------|----------------|---------|
-| **Azure AI Search** | A corpus indexed in Azure (keyword search) | Tests correction under corpus-based retrieval. |
-| **Web (Serper)** | Live Google search | Tests correction under open-web retrieval. |
-
-
 ## Repository structure
 
 ```
