@@ -110,11 +110,11 @@ def run_rarr_question_generation(
 # 4. EDITOR LOGIC
 # ---------------------------------------------------------------------------
 def parse_editor_response(api_response: str) -> Optional[str]:
-    for line in api_response.strip().split("\n"):
-        if "My fix:" in line:
-            edited_claim = line.split("My fix:")[-1].strip()
-            if edited_claim:
-                return edited_claim
+    matches = [ln for ln in api_response.strip().split("\n") if "My fix:" in ln]
+    if matches:
+        edited_claim = matches[-1].split("My fix:")[-1].strip()
+        if edited_claim:
+            return edited_claim
     for line in api_response.strip().split("\n"):
         line = line.strip()
         if line and line[0].isupper() and line[-1] in '.!?':
@@ -228,6 +228,57 @@ def process_paragraph(
     results["final_text"] = " ".join(results["revised_statements"])
     return results
 
+
+
+# ---------------------------------------------------------------------------
+# 6. ANSWER SYNTHESIS (direct, evidence-grounded answer to the question)
+# ---------------------------------------------------------------------------
+def synthesize_answer(
+    question: str,
+    evidence_texts: List[str],
+    model: str = "gpt-3.5-turbo",
+    num_retries: int = 3,
+) -> str:
+    """Write a concise, evidence-grounded answer to `question` using only the
+    retrieved evidence. Always runs (not gated). Returns "" on failure."""
+    seen = set()
+    uniq = []
+    for ev in evidence_texts:
+        ev = (ev or "").strip()
+        if ev and ev not in seen:
+            seen.add(ev)
+            uniq.append(ev)
+    evidence_block = "\n\n".join(f"- {e}" for e in uniq[:8]) or "(no evidence retrieved)"
+
+    user_content = (
+        "You are a medical expert answering a question using ONLY the evidence provided.\n\n"
+        f"Question: {question}\n\n"
+        f"Evidence:\n{evidence_block}\n\n"
+        "Instructions:\n"
+        "- Answer the question directly and concisely in 1-3 sentences, using only facts supported by the evidence.\n"
+        "- Do not add information that is not in the evidence.\n"
+        "- If the evidence does not contain enough information, reply exactly: The evidence does not provide a clear answer.\n\n"
+        "Answer:"
+    )
+    for attempt in range(num_retries):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "You answer medical questions concisely and only from the given evidence."},
+                    {"role": "user", "content": user_content},
+                ],
+                temperature=0.0,
+                max_tokens=300,
+            )
+            text = (response.choices[0].message.content or "").strip()
+            if "Answer:" in text:
+                text = text.split("Answer:")[-1].strip()
+            if text:
+                return text
+        except OpenAIError:
+            time.sleep(2 * (attempt + 1))
+    return ""
 
 if __name__ == "__main__":
     example_paragraph = (

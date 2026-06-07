@@ -49,6 +49,10 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--temperature_qgen", type=float, default=0.7, help="Temperature for question generation.")
     parser.add_argument("--hallucinate_evidence", action="store_true",
                         help="Generate evidence via LLM instead of web retrieval.")
+    parser.add_argument("--use_knowledge", action="store_true",
+                        help="Use each record's 'knowledge' field as the evidence (gold context) instead of web search.")
+    parser.add_argument("--limit", type=int, default=0,
+                        help="Max number of claims to process (0 = all in the input file).")
     parser.add_argument("--max_search_results_per_query",    type=int, default=3)
     parser.add_argument("--max_sentences_per_passage",       type=int, default=4)
     parser.add_argument("--sliding_distance",                type=int, default=1)
@@ -165,6 +169,8 @@ def process_atomic_statement(
     temperature_qgen: float,
     search_params: dict,
     hallucinate_evidence: bool = False,
+    use_knowledge: bool = False,
+    knowledge_text: str = "",
 ) -> dict:
     """
     For one atomic statement:
@@ -193,7 +199,9 @@ def process_atomic_statement(
 
         for question in questions:
             # ---- Evidence retrieval ---------------------------------------
-            if hallucinate_evidence:
+            if use_knowledge and knowledge_text:
+                evidences = [{"text": knowledge_text, "url": "medhallu_knowledge", "title": "MedHallu Knowledge"}]
+            elif hallucinate_evidence:
                 ev_result = hallucination.run_evidence_hallucination(
                     query=question,
                     model=model,
@@ -273,6 +281,7 @@ def revise_claim(
     temperature_qgen: float,
     search_params: dict,
     hallucinate_evidence: bool,
+    use_knowledge: bool = False,
 ) -> dict:
     """
     Revise all atomic statements in one claim object.
@@ -283,6 +292,7 @@ def revise_claim(
         logger.warning("Empty claim encountered, skipping.")
         return {**claim_obj, "revised_claim": original_text, "statement_results": []}
 
+    knowledge_text = claim_obj.get("knowledge", "") or ""
     statements = split_into_atomic_statements(original_text)
     revised_statements = []
     statement_results = []
@@ -296,6 +306,8 @@ def revise_claim(
             temperature_qgen=temperature_qgen,
             search_params=search_params,
             hallucinate_evidence=hallucinate_evidence,
+            use_knowledge=use_knowledge,
+            knowledge_text=knowledge_text,
         )
         revised_statements.append(result["revised_statement"])
         statement_results.append(result)
@@ -321,6 +333,7 @@ def revise_and_save_jsonl(
     sliding_distance: int,
     max_passages_per_search_result: int,
     hallucinate_evidence: bool,
+    use_knowledge: bool = False,
 ) -> None:
     search_params = {
         "max_search_results_per_query": max_search_results_per_query,
@@ -339,6 +352,7 @@ def revise_and_save_jsonl(
                 temperature_qgen=temperature_qgen,
                 search_params=search_params,
                 hallucinate_evidence=hallucinate_evidence,
+                use_knowledge=use_knowledge,
             )
             write_result(writer, result)
             logger.info(f"Revised: {claim_obj.get('claim', '')[:60]}...")
@@ -366,8 +380,8 @@ def export_to_excel(output_jsonl: str, excel_path: str) -> None:
         border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
         # Headers
-        headers = ["#", "Question", "Long Answer (Ground Truth)", "Revised Claim"]
-        col_widths = [5, 30, 60, 60]
+        headers = ["#", "Question", "Hallucinated Claim", "Long Answer (Ground Truth)", "Revised Claim"]
+        col_widths = [5, 26, 45, 45, 45]
         for col, (h, w) in enumerate(zip(headers, col_widths), start=1):
             cell = ws.cell(row=1, column=col, value=h)
             cell.font = header_font
@@ -388,6 +402,7 @@ def export_to_excel(output_jsonl: str, excel_path: str) -> None:
             values = [
                 i,
                 obj.get("question_text", ""),
+                obj.get("claim", ""),
                 obj.get("long_answer", ""),
                 obj.get("revised_claim", ""),
             ]
@@ -416,9 +431,9 @@ def main():
     claims = read_claims(args.input_file)
     logger.info(f"Total claims loaded: {len(claims)}")
 
-    # Limit to first 10 for testing
-    claims = claims[:10]
-    logger.info(f"Processing first {len(claims)} claims for test run.")
+    if getattr(args, "limit", 0):
+        claims = claims[:args.limit]
+    logger.info(f"Processing {len(claims)} claims.")
 
     revise_and_save_jsonl(
         claims=claims,
@@ -430,6 +445,7 @@ def main():
         sliding_distance=args.sliding_distance,
         max_passages_per_search_result=args.max_passages_per_search_result,
         hallucinate_evidence=args.hallucinate_evidence,
+        use_knowledge=args.use_knowledge,
     )
     logger.info(f"Done. Output saved to {args.output_file}")
 
@@ -441,6 +457,9 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
 # import argparse
 # import json
 # import logging

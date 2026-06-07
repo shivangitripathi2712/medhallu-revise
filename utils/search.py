@@ -50,6 +50,42 @@ PASSAGE_RANKER = CrossEncoder(
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 
+# ---------------------------------------------------------------------------
+# Serper (Google) configuration  -- primary retriever
+# ---------------------------------------------------------------------------
+SERPER_API_KEY = os.getenv("SERPER_API_KEY")
+# Use "search" for general Google, or "scholar" for Google Scholar.
+SERPER_ENDPOINT = "search"   # change to "scholar" for academic-only results
+SERPER_URL = f"https://google.serper.dev/{SERPER_ENDPOINT}"
+
+
+def search_serper(query: str, max_results: int = 5):
+    """Query Serper (Google) and return dicts with 'url', 'content', 'title' --
+    the same shape run_search expects, so it is a drop-in for search_tavily."""
+    if not SERPER_API_KEY:
+        logger.error("SERPER_API_KEY not set. Cannot perform search.")
+        return []
+    headers = {"X-API-KEY": SERPER_API_KEY, "Content-Type": "application/json"}
+    payload = {"q": query, "num": max_results}
+    try:
+        resp = requests.post(SERPER_URL, headers=headers, json=payload, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        organic = data.get("organic", []) or []
+        results = []
+        for r in organic[:max_results]:
+            results.append({
+                "url": r.get("link", ""),
+                "content": (r.get("snippet", "") or "").strip(),
+                "title": r.get("title", ""),
+            })
+        logger.info(f"Serper ({SERPER_ENDPOINT}) returned {len(results)} results for: {query}")
+        return results
+    except Exception as e:
+        logger.error(f"Serper search failed: {e}")
+        return []
+
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 }
@@ -221,7 +257,7 @@ def run_search(
         # cached_search_results is a list of URL strings (legacy support)
         tavily_results = [{"url": u, "content": "", "title": ""} for u in cached_search_results]
     else:
-        tavily_results = search_tavily(enhanced_query, max_results=max_search_results_per_query)
+        tavily_results = search_azure(enhanced_query, max_results=max_search_results_per_query)
 
     if not tavily_results:
         logger.warning("No search results found.")
@@ -1364,3 +1400,10 @@ if __name__ == "__main__":
 #             passage["score"] = prob
 
 #     return retrieved_passages
+
+def search_azure(query, max_results=5):
+    from azure_search_retrieval import search as _azsearch
+    rows = _azsearch(query, k=max_results)
+    out = [{"url": r.get("url",""), "content": r.get("content",""), "title": r.get("title","")} for r in rows]
+    logger.info(f"Azure Search returned {len(out)} results for: {query}")
+    return out

@@ -1,0 +1,9 @@
+{
+  "setting": "with_knowledge",
+  "n": 200,
+  "accuracy": 0.83,
+  "precision": 0.7844827586206896,
+  "recall": 0.91,
+  "f1": 0.8425925925925926,
+  "unparseable": 0
+}

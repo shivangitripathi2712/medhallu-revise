@@ -1,28 +1,23 @@
-# Python cache
-__pycache__/
-*.pyc
-
-# Virtual environments
-venv/
-.env/
-env/
+# environments / caches
 rr/
+.venv/
+__pycache__/
+*/__pycache__/
+*.pyc
+.ipynb_checkpoints/
 
-# Logs
+# archive & logs
+archive/
 *.log
 
-# System files
-.DS_Store
+# secrets (never commit)
+.env
+*secret*
+*apikey*
 
-# Output/result files
-output*
-my_output.json
-output_partial.xlsx
-*.xlsx
-*.csv
-
-# Large datasets / generated data
-NQdataset.json
-statement.jsonl
-textstatemnts.txt
-*.jsonl
+# large data / model artifacts
+*.bin
+*.safetensors
+hf_cache/
+*.py.orig
+*.py.pre*
